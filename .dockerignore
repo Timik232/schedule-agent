@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+.env
+env/
+.git/
+.vscode/
+.pytest_cache/
+.specify/
+.qodo/
+__pypackages__/
+build/
+dist/
