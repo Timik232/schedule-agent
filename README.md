@@ -89,6 +89,8 @@ QUERY_TIMEOUT_SECONDS=30
 
 **Required**: You must have a SQLite seed database file (e.g., `min (1).db`) containing schedule data.
 
+**Download the seed database**: [min (1).db](https://komolov.synology.me:5001/d/s/15pG3eQFXXhk4ZMXmokVmvueB4VppGjA/lVAW-1tLwIcH_CKX3wMEab03Li3nuyxk-urFg7_AEvgw)
+
 1. **Place the SQLite file** in your project root or any accessible location
 2. **Update `.env`** to point to it: `SQLITE_SEED_PATH="./min (1).db"`
 3. **Start PostgreSQL** (via Docker Compose or standalone)
