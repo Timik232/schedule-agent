@@ -32,7 +32,11 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
+    "pip-tools>=7.0.0",
 ]
+
+[project.scripts]
+generate-requirements = "pip_tools.scripts.compile:cli"
 
 [build-system]
 requires = ["hatchling"]
