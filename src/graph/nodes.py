@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from datetime import date as date_type, datetime, time as time_type, timedelta
 from typing import Any, Optional
@@ -13,6 +14,8 @@ from pydantic import ValidationError
 from ..config import LLMProvider, get_settings
 from ..models.schemas import (
     ExtractedEntities,
+    GroupScheduleLessonResponse,
+    GroupScheduleResponse,
     LessonResponse,
     MeetingSlot,
     MeetingSlotsResponse,
@@ -37,6 +40,8 @@ LOGGER = get_logger(__name__)
 TOOL_DISPATCH: dict[ToolName, Callable[..., Awaitable[Any]]] = {
     ToolName.GET_FIRST_CLASS_FOR_GROUP: sql_templates.get_first_class_for_group,
     ToolName.GET_TEACHER_SCHEDULE: sql_templates.get_teacher_schedule,
+    ToolName.GET_GROUP_SCHEDULE: sql_templates.get_group_schedule,
+    ToolName.GET_ROOM_SCHEDULE: sql_templates.get_room_schedule,
     ToolName.FIND_COMMON_FREE_SLOTS: meeting_slots.plan_meeting_slots,
 }
 
@@ -54,13 +59,86 @@ def _acquire_llm_client(*, streaming: bool = False) -> BaseChatModel:
     return LLM_CLIENT_FACTORY(streaming=streaming)
 
 
+GROUP_CODE_PATTERN = re.compile(r"[A-Za-zА-Яа-яЁё]{2,}-\d{2}-\d{2}", re.IGNORECASE)
+DATE_TOKEN_PATTERN = re.compile(r"[A-Za-zА-Яа-яЁё0-9./-]+")
+
+
+def _normalize_explicit_date(token: str) -> Optional[str]:
+    cleaned = token.strip().replace(",", "")
+    if not cleaned:
+        return None
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleaned):
+        return cleaned
+
+    match = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", cleaned)
+    if match:
+        day, month, year = match.groups()
+        try:
+            return date_type(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            return None
+
+    match = re.fullmatch(r"(\d{4})[./-](\d{1,2})[./-](\d{1,2})", cleaned)
+    if match:
+        year, month, day = match.groups()
+        try:
+            return date_type(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            return None
+
+    return None
+
+
+def _extract_first_date_token(query: str) -> Optional[date_type]:
+    for token in DATE_TOKEN_PATTERN.findall(query.lower()):
+        normalized_relative = _normalize_relative_date(token)
+        if normalized_relative:
+            return date_type.fromisoformat(normalized_relative)
+
+        explicit_iso = _normalize_explicit_date(token)
+        if explicit_iso:
+            return date_type.fromisoformat(explicit_iso)
+
+    return None
+
+
+def _extract_group_codes(query: str) -> list[str]:
+    groups: list[str] = []
+    for match in GROUP_CODE_PATTERN.findall(query):
+        normalized = match.lower()
+        if normalized not in groups:
+            groups.append(normalized)
+    return groups
+
+
 def _fallback_entities(query: str) -> ExtractedEntities:
     """Heuristic fallback when LLM extraction fails."""
 
     lowered = query.lower()
+    groups = _extract_group_codes(query)
+    date_value = _extract_first_date_token(query)
+
+    intent = QueryIntent.FIRST_CLASS
     if any(keyword in lowered for keyword in ("препод", "преподав", "teacher")):
-        return ExtractedEntities(intent=QueryIntent.TEACHER_SCHEDULE, groups=[], teachers=[], rooms=[], date=None)
-    return ExtractedEntities(intent=QueryIntent.FIRST_CLASS, groups=[], teachers=[], rooms=[], date=None)
+        intent = QueryIntent.TEACHER_SCHEDULE
+    elif any(keyword in lowered for keyword in ("встрече", "встреч", "слот")) and groups:
+        intent = QueryIntent.FIND_MEETING_SLOT
+    elif any(keyword in lowered for keyword in ("расписан", "заняти", "пары")) and groups:
+        intent = QueryIntent.GROUP_SCHEDULE
+
+    date_range: Optional[tuple[date_type, date_type]] = None
+    if date_value and intent in {QueryIntent.GROUP_SCHEDULE, QueryIntent.TEACHER_SCHEDULE}:
+        date_range = (date_value, date_value)
+
+    return ExtractedEntities(
+        intent=intent,
+        groups=groups,
+        teachers=[],
+        rooms=[],
+        date=date_value,
+        date_range=date_range,
+    )
 
 
 RELATIVE_DATE_OFFSETS: dict[str, int] = {
@@ -163,14 +241,17 @@ def _post_process_entities(entities: ExtractedEntities) -> ExtractedEntities:
         updates["date_range"] = (entities.date, entities.date)
 
     if entities.intent == QueryIntent.GENERAL_QUESTION:
-        if entities.groups and entities.date:
-            updates["intent"] = QueryIntent.FIRST_CLASS
+        if entities.groups and (entities.date_range or entities.date):
+            updates["intent"] = QueryIntent.GROUP_SCHEDULE
         elif entities.teachers and (entities.date_range or entities.date):
             updates["intent"] = QueryIntent.TEACHER_SCHEDULE
             if not entities.date_range and entities.date:
                 updates["date_range"] = (entities.date, entities.date)
 
     if entities.intent == QueryIntent.TEACHER_SCHEDULE and not entities.date_range and entities.date:
+        updates["date_range"] = (entities.date, entities.date)
+
+    if entities.intent == QueryIntent.GROUP_SCHEDULE and not entities.date_range and entities.date:
         updates["date_range"] = (entities.date, entities.date)
 
     if updates:
@@ -222,7 +303,7 @@ async def parse_query_node(state: AgentState) -> AgentStateUpdate:
         LOGGER.bind(query=query, provider=provider.value, error=str(exc)).warning("Entity extraction failed; using fallback")
         entities = _fallback_entities(query)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.bind(query=query, provider=provider.value, error=str(exc)).exception("LLM extraction failed")
+        LOGGER.bind(query=query, provider=provider.value, error=str(exc)).error("LLM extraction failed")
         entities = _fallback_entities(query)
 
     entities = _post_process_entities(entities)
@@ -287,6 +368,34 @@ async def select_tool_node(state: AgentState) -> AgentStateUpdate:
             "tool_calls": [
                 ToolCall(
                     tool=ToolName.GET_TEACHER_SCHEDULE,
+                    parameters=params,
+                )
+            ]
+        }
+
+    if intent == QueryIntent.GROUP_SCHEDULE:
+        if not entities or not entities.groups:
+            return {"error": "Academic group not provided"}
+        if not entities.date_range:
+            return {"error": "Date range not provided"}
+
+        date_start, date_end = entities.date_range
+        group_norm = entities.groups[0]
+        params = {
+            "group_norm": group_norm,
+            "date_start": date_start,
+            "date_end": date_end,
+        }
+        LOGGER.bind(
+            tool=ToolName.GET_GROUP_SCHEDULE.value,
+            group=group_norm,
+            date_start=str(date_start),
+            date_end=str(date_end),
+        ).debug("Prepared tool call")
+        return {
+            "tool_calls": [
+                ToolCall(
+                    tool=ToolName.GET_GROUP_SCHEDULE,
                     parameters=params,
                 )
             ]
@@ -376,7 +485,7 @@ def _normalize_tool_result(tool_call: ToolCall, outcome: Any) -> Any:
             return outcome
 
     if tool_call.tool == ToolName.GET_TEACHER_SCHEDULE:
-        lessons: list[ScheduleLessonResponse] = []
+        teacher_lessons: list[ScheduleLessonResponse] = []
         for row in outcome or []:
             lesson_payload = {
                 "date": row.get("date"),
@@ -388,7 +497,7 @@ def _normalize_tool_result(tool_call: ToolCall, outcome: Any) -> Any:
                 "lesson_type": row.get("lesson_type"),
             }
             try:
-                lessons.append(ScheduleLessonResponse.model_validate(lesson_payload))
+                teacher_lessons.append(ScheduleLessonResponse.model_validate(lesson_payload))
             except ValidationError:
                 LOGGER.warning("Failed to validate lesson payload", payload=lesson_payload)
         try:
@@ -402,7 +511,38 @@ def _normalize_tool_result(tool_call: ToolCall, outcome: Any) -> Any:
             teacher=teacher,
             date_start=date_start,
             date_end=date_end,
-            lessons=lessons,
+            lessons=teacher_lessons,
+        ).model_dump()
+
+    if tool_call.tool == ToolName.GET_GROUP_SCHEDULE:
+        group_lessons: list[GroupScheduleLessonResponse] = []
+        for row in outcome or []:
+            lesson_payload = {
+                "date": row.get("date"),
+                "start_time": row.get("start_time"),
+                "end_time": row.get("end_time"),
+                "subject": row.get("subject"),
+                "teachers": list(row.get("teachers") or []),
+                "rooms": list(row.get("rooms") or []),
+                "lesson_type": row.get("lesson_type"),
+            }
+            try:
+                group_lessons.append(GroupScheduleLessonResponse.model_validate(lesson_payload))
+            except ValidationError:
+                LOGGER.warning("Failed to validate group lesson payload", payload=lesson_payload)
+
+        try:
+            date_start = _ensure_date(tool_call.parameters.get("date_start"))
+            date_end = _ensure_date(tool_call.parameters.get("date_end"))
+        except Exception:  # noqa: BLE001
+            date_start = date_end = date_type.today()
+
+        group_norm = str(tool_call.parameters.get("group_norm", ""))
+        return GroupScheduleResponse(
+            group=group_norm,
+            date_start=date_start,
+            date_end=date_end,
+            lessons=group_lessons,
         ).model_dump()
 
     if tool_call.tool == ToolName.FIND_COMMON_FREE_SLOTS:

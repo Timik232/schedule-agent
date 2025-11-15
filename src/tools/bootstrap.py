@@ -46,10 +46,10 @@ async def migrate_sqlite_seed_if_needed() -> None:
 
     sqlite_path = Path(seed_path_raw)
     if not sqlite_path.exists():
-        LOGGER.warning("SQLite seed file not found; skipping bootstrap", path=str(sqlite_path))
+        LOGGER.bind(path=str(sqlite_path)).warning("SQLite seed file not found; skipping bootstrap")
         return
 
-    LOGGER.info("Checking PostgreSQL seed status", sqlite_seed=str(sqlite_path))
+    LOGGER.bind(sqlite_seed=str(sqlite_path)).info("Checking PostgreSQL seed status")
 
     try:
         sqlite_conn = sqlite3.connect(str(sqlite_path))
@@ -302,9 +302,9 @@ async def _copy_data(conn: asyncpg.Connection, sqlite_conn: sqlite3.Connection) 
         if not rows:
             continue
         payloads = [seed.transform(row) for row in rows]
-        LOGGER.debug("Seeding table", table=seed.name, rows=len(payloads))
+        LOGGER.bind(table=seed.name, rows=len(payloads)).debug("Seeding table")
         await conn.executemany(seed.insert_sql, payloads)
         seeded_tables.append(seed.name)
 
     if seeded_tables:
-        LOGGER.info("Seed data copied", tables=seeded_tables)
+        LOGGER.bind(tables=seeded_tables).info("Seed data copied")

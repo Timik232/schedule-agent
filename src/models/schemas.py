@@ -74,6 +74,27 @@ class TeacherScheduleResponse(BaseModel):
     lessons: list[ScheduleLessonResponse] = Field(default_factory=list)
 
 
+class GroupScheduleLessonResponse(BaseModel):
+    """Lesson representation used for group schedule listings."""
+
+    date: date_type
+    start_time: time_type
+    end_time: time_type
+    subject: str
+    teachers: list[str] = Field(default_factory=list)
+    rooms: list[str] = Field(default_factory=list)
+    lesson_type: Optional[str] = None
+
+
+class GroupScheduleResponse(BaseModel):
+    """Group schedule payload containing multiple lessons."""
+
+    group: str
+    date_start: date_type
+    date_end: date_type
+    lessons: list[GroupScheduleLessonResponse] = Field(default_factory=list)
+
+
 class MeetingSlot(BaseModel):
     """Available meeting slot suggestion produced by the optimizer."""
 

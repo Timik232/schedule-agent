@@ -68,11 +68,14 @@ LLM_TEMPERATURE=0.0
 
 # Database Configuration
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/schedule_db
+SQLITE_SEED_PATH=/absolute/path/to/min.db
 
 # Security
 MAX_SQL_ROWS=1000
 QUERY_TIMEOUT_SECONDS=30
 ```
+
+Wrap the `SQLITE_SEED_PATH` value in quotes if the path contains spaces (e.g., `"./min (1).db"`).
 
 ## Usage
 
@@ -150,7 +153,7 @@ docker compose up --build
 # Postgres exposed at localhost:5432 (user/password: schedule/schedule)
 ```
 
-The compose stack mounts `min (1).db` into the Postgres container as an initialization asset. Ensure this file contains a compatible SQL dump; it will be executed on first startup.
+The FastAPI app automatically seeds PostgreSQL from the bundled SQLite database referenced by `SQLITE_SEED_PATH`. When using Docker Compose the `min (1).db` file is mounted into the API container and mapped to `/app/data/min.db`; override `SQLITE_SEED_PATH` if you relocate the seed file.
 
 ## Testing
 
