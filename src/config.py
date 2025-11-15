@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     llm_model: str = Field("gpt-4o-mini-copilot", alias="LLM_MODEL")
     llm_temperature: float = Field(0.0, alias="LLM_TEMPERATURE", ge=0.0, le=1.0)
 
+    sqlite_seed_path: str | None = Field(default=None, alias="SQLITE_SEED_PATH")
+
     database_url: str = Field(..., alias="DATABASE_URL")
     max_sql_rows: int = Field(1000, alias="MAX_SQL_ROWS", gt=0, le=1000)
     query_timeout_seconds: int = Field(30, alias="QUERY_TIMEOUT_SECONDS", ge=1)
@@ -98,6 +100,14 @@ class Settings(BaseSettings):
             "timeout": self.query_timeout_seconds,
             "max_rows": self.max_sql_rows,
         }
+
+    @property
+    def postgres_dsn(self) -> str:
+        """Return DSN suitable for asyncpg connections."""
+
+        if self.database_url.startswith("postgresql+asyncpg://"):
+            return "postgresql://" + self.database_url.split("://", 1)[1]
+        return self.database_url
 
 
 @lru_cache(1)

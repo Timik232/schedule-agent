@@ -1,6 +1,7 @@
 """FastAPI application exposing the schedule agent endpoints."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from ..config import get_settings
 from ..graph.builder import build_schedule_agent_graph
 from ..graph.state import AgentState
 from ..models.schemas import AgentReply, ToolCall
+from ..tools.bootstrap import migrate_sqlite_seed_if_needed
 from ..utils.guardrails import guard_and_normalize_message
 from ..utils.validators import ValidationError
 
@@ -24,7 +26,14 @@ def _get_graph() -> CompiledStateGraph | Any:
         _GRAPH = build_schedule_agent_graph()
     return _GRAPH
 
-app = FastAPI(title="Schedule Agent API", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    await migrate_sqlite_seed_if_needed()
+    yield
+
+
+app = FastAPI(title="Schedule Agent API", version="0.1.0", lifespan=_lifespan)
 
 
 class QueryRequest(BaseModel):
@@ -71,7 +80,10 @@ async def run_agent(user_query: str, thread_id: str | None) -> AgentReply:
     }
 
     try:
-        final_state = await graph.ainvoke(initial_state, config={"thread_id": thread_id or "default"})
+        final_state = await graph.ainvoke(
+            initial_state,
+            config={"configurable": {"thread_id": thread_id or "default"}},
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail="Agent execution failed") from exc
 

@@ -56,10 +56,8 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
         async with session.begin():
             await session.execute(text("SET TRANSACTION READ ONLY"))
-            await session.execute(
-                text("SET LOCAL statement_timeout = :timeout_ms"),
-                {"timeout_ms": settings.query_timeout_seconds * 1000},
-            )
+            timeout_ms = int(settings.query_timeout_seconds * 1000)
+            await session.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             yield session
 
 
