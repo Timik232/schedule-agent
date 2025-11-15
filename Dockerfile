@@ -11,10 +11,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md /app/
-COPY src /app/src
-
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir .
+
+COPY src /app/src
 
 COPY specs /app/specs
 

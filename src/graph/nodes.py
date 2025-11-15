@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from datetime import date as date_type, datetime, time as time_type
+from datetime import date as date_type, datetime, time as time_type, timedelta
 from typing import Any, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from ..config import LLMProvider, get_settings
 from ..models.schemas import (
     ExtractedEntities,
     LessonResponse,
@@ -62,6 +63,97 @@ def _fallback_entities(query: str) -> ExtractedEntities:
     return ExtractedEntities(intent=QueryIntent.FIRST_CLASS, groups=[], teachers=[], rooms=[], date=None)
 
 
+RELATIVE_DATE_OFFSETS: dict[str, int] = {
+    "сегодня": 0,
+    "завтра": 1,
+    "послезавтра": 2,
+    "вчера": -1,
+    "позавчера": -2,
+}
+
+
+def _normalize_relative_date(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+
+    value = raw.strip().lower()
+    for prefix in ("на ", "в ", "во "):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+            break
+
+    value = value.replace(".", "")
+    offset = RELATIVE_DATE_OFFSETS.get(value)
+    if offset is None:
+        return None
+
+    return (date_type.today() + timedelta(days=offset)).isoformat()
+
+
+def _normalize_llm_entities_payload(raw_payload: str, query: str) -> str:
+    try:
+        payload = json.loads(raw_payload)
+    except Exception:
+        return raw_payload
+
+    if not isinstance(payload, dict):
+        return raw_payload
+
+    changed = False
+    fallback: Optional[ExtractedEntities] = None
+
+    if "group" in payload and "groups" not in payload:
+        groups_value = payload.pop("group")
+        if isinstance(groups_value, str):
+            payload["groups"] = [groups_value]
+        elif isinstance(groups_value, list):
+            payload["groups"] = groups_value
+        changed = True
+
+    if "teacher" in payload and "teachers" not in payload:
+        teacher_value = payload.pop("teacher")
+        if isinstance(teacher_value, str):
+            payload["teachers"] = [teacher_value]
+        elif isinstance(teacher_value, list):
+            payload["teachers"] = teacher_value
+        changed = True
+
+    if "room" in payload and "rooms" not in payload:
+        room_value = payload.pop("room")
+        if isinstance(room_value, str):
+            payload["rooms"] = [room_value]
+        elif isinstance(room_value, list):
+            payload["rooms"] = room_value
+        changed = True
+
+    normalized_date = _normalize_relative_date(payload.get("date"))
+    if normalized_date is not None:
+        payload["date"] = normalized_date
+        changed = True
+
+    if isinstance(payload.get("date_range"), list):
+        date_range_list = payload["date_range"]
+        normalized_range: list[str] = []
+        for item in date_range_list:
+            if isinstance(item, str):
+                normalized = _normalize_relative_date(item) or item
+                normalized_range.append(normalized)
+            else:
+                normalized_range.append(item)
+        payload["date_range"] = normalized_range
+        changed = True
+
+    if not payload.get("intent"):
+        fallback = fallback or _fallback_entities(query)
+        payload["intent"] = fallback.intent.value
+        changed = True
+
+    if changed:
+        return json.dumps(payload, ensure_ascii=False)
+
+    return raw_payload
+
+
 def _post_process_entities(entities: ExtractedEntities) -> ExtractedEntities:
     """Apply heuristics to fill missing fields such as date ranges."""
 
@@ -104,26 +196,33 @@ async def parse_query_node(state: AgentState) -> AgentStateUpdate:
             "entities": entities,
         }
     prompt = build_entity_extraction_prompt(query)
+    settings = get_settings()
+    provider = settings.llm_client_config.provider
+    supports_structured = provider == LLMProvider.COPILOT
 
     try:
-        response = await llm.ainvoke(  # type: ignore[attr-defined]
-            prompt,
-            response_format={
-                "type": "json_schema",
-                "json_schema": ExtractedEntities.model_json_schema(),
-            },
-        )
-        payload = response.content
-        if isinstance(payload, str):
-            raw_entities = payload
+        if supports_structured:
+            response = await llm.ainvoke(  # type: ignore[attr-defined]
+                prompt,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": ExtractedEntities.model_json_schema(),
+                },
+            )
+            payload = response.content
+            raw_entities = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         else:
-            raw_entities = json.dumps(payload, ensure_ascii=False)
-        entities = ExtractedEntities.model_validate_json(raw_entities)
-    except (ValidationError, ValueError) as exc:
-        LOGGER.bind(query=query, error=str(exc)).warning("Entity extraction failed; using fallback")
+            response = await llm.ainvoke(prompt)  # type: ignore[attr-defined]
+            payload = response.content
+            raw_entities = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+
+        normalized_payload = _normalize_llm_entities_payload(raw_entities, query)
+        entities = ExtractedEntities.model_validate_json(normalized_payload)
+    except (ValidationError, ValueError, TypeError) as exc:
+        LOGGER.bind(query=query, provider=provider.value, error=str(exc)).warning("Entity extraction failed; using fallback")
         entities = _fallback_entities(query)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.bind(query=query, error=str(exc)).exception("LLM extraction failed")
+        LOGGER.bind(query=query, provider=provider.value, error=str(exc)).exception("LLM extraction failed")
         entities = _fallback_entities(query)
 
     entities = _post_process_entities(entities)
@@ -380,6 +479,7 @@ async def format_response_node(state: AgentState) -> AgentStateUpdate:
 
     payload_json = json.dumps(prompt_payload, ensure_ascii=False, default=str)
     user_prompt = build_format_response_prompt(payload_json)
+
     try:
         llm = _acquire_llm_client()
     except Exception as exc:  # noqa: BLE001
