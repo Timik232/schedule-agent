@@ -36,9 +36,10 @@ schedule-ai-agent/
 ## Setup
 
 ### Prerequisites
-- Python 3.11-3.12
-- PostgreSQL database with schedule schema
-- OpenAI API key (or other LLM provider)
+- Python 3.11+ (tested on 3.11, 3.12, 3.13)
+- PostgreSQL database (can use Docker Compose)
+- SQLite seed database file (`min (1).db` or similar)
+- LLM API key (GitHub Copilot or LM Studio)
 
 ### Installation
 
@@ -47,11 +48,16 @@ schedule-ai-agent/
 git clone <repo-url>
 cd schedule-ai-agent
 
-# Install Poetry (if not installed)
-curl -sSL https://install.python-poetry.org | python3 -
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-poetry install
+pip install -e .
+
+# Generate pinned requirements (optional)
+pip install pip-tools
+pip-compile pyproject.toml -o requirements.txt
 
 # Copy environment template
 cp .env.example .env
@@ -62,27 +68,62 @@ cp .env.example .env
 
 ```bash
 # LLM Configuration
-OPENAI_API_KEY=sk-...
-LLM_MODEL=gpt-4o-mini
+LLM_PROVIDER=copilot  # or lm_studio
+LLM_API_BASE_URL=https://api.githubcopilot.com  # or http://localhost:1234/v1 for LM Studio
+LLM_API_KEY=your-api-key-here
+LLM_MODEL=gpt-4o-mini-copilot
 LLM_TEMPERATURE=0.0
 
 # Database Configuration
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/schedule_db
-SQLITE_SEED_PATH=/absolute/path/to/min.db
+DATABASE_URL=postgresql+asyncpg://schedule:schedule@localhost:5432/schedule
+SQLITE_SEED_PATH="./min (1).db"
 
 # Security
 MAX_SQL_ROWS=1000
 QUERY_TIMEOUT_SECONDS=30
 ```
 
-Wrap the `SQLITE_SEED_PATH` value in quotes if the path contains spaces (e.g., `"./min (1).db"`).
+**Important**: Wrap `SQLITE_SEED_PATH` in quotes if the path contains spaces.
+
+### Database Setup
+
+**Required**: You must have a SQLite seed database file (e.g., `min (1).db`) containing schedule data.
+
+1. **Place the SQLite file** in your project root or any accessible location
+2. **Update `.env`** to point to it: `SQLITE_SEED_PATH="./min (1).db"`
+3. **Start PostgreSQL** (via Docker Compose or standalone)
+4. **Run the server** - migration happens automatically on startup:
+
+```bash
+# Using Docker Compose (recommended)
+docker compose up -d database
+
+# Or start standalone PostgreSQL and create database manually
+# Then verify migration:
+source venv/bin/activate
+uvicorn src.api.server:app --host 0.0.0.0 --port 8080
+```
+
+The first startup will:
+- Create all required PostgreSQL tables
+- Migrate data from SQLite to PostgreSQL (273k+ lessons, 2k+ teachers, etc.)
+- Log "PostgreSQL seed completed successfully" when done
+
+To verify migration:
+```bash
+docker exec schedule-agent-db psql -U schedule -d schedule -c "SELECT COUNT(*) FROM lesson;"
+```
 
 ## Usage
 
 ### Start Development Server
 
 ```bash
-poetry run uvicorn src.api.server:app --reload --port 8080
+# Activate virtual environment
+source venv/bin/activate
+
+# Start server with auto-reload
+uvicorn src.api.server:app --reload --port 8080
 ```
 
 ### Example Queries
@@ -145,6 +186,8 @@ curl -X POST http://localhost:8080/query \
 
 ## Docker Deployment
 
+**Prerequisites**: Ensure `min (1).db` exists in the project root before running Docker Compose.
+
 ```bash
 # Build and run both API and Postgres services
 docker compose up --build
@@ -153,16 +196,30 @@ docker compose up --build
 # Postgres exposed at localhost:5432 (user/password: schedule/schedule)
 ```
 
-The FastAPI app automatically seeds PostgreSQL from the bundled SQLite database referenced by `SQLITE_SEED_PATH`. When using Docker Compose the `min (1).db` file is mounted into the API container and mapped to `/app/data/min.db`; override `SQLITE_SEED_PATH` if you relocate the seed file.
+The FastAPI app automatically seeds PostgreSQL from the SQLite database on first startup:
+- Docker Compose mounts `./min (1).db` → `/app/data/min.db` in the container
+- The app reads `SQLITE_SEED_PATH=/app/data/min.db` from the container environment
+- Migration runs automatically if PostgreSQL is empty
+- Check logs for "PostgreSQL seed completed successfully"
+
+If you rename or relocate the seed file, update both:
+1. The volume mount in `docker-compose.yml`
+2. The `SQLITE_SEED_PATH` environment variable
 
 ## Testing
 
 ```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Install dev dependencies
+pip install -e ".[dev]"
+
 # Run all tests
-poetry run pytest
+pytest
 
 # With coverage
-poetry run pytest --cov=src --cov-report=html
+pytest --cov=src --cov-report=html
 ```
 
 ## Deployment Notes
