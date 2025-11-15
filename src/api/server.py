@@ -94,9 +94,12 @@ async def run_agent(user_query: str, thread_id: str | None) -> AgentReply:
     final_response = final_state.get("final_response") or "Ответ не сформирован."
     error = final_state.get("error")
     intent = final_state.get("intent")
+    
     data = final_state.get("final_payload")
     if data is None and final_state.get("tool_results"):
-        data = final_state["tool_results"][-1].get("result")
+        tool_results = final_state["tool_results"]
+        if tool_results:
+            data = tool_results[-1].get("result")
 
     return AgentReply(
         response=final_response,

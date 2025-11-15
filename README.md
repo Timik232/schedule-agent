@@ -200,13 +200,13 @@ docker compose up --build
 
 The FastAPI app automatically seeds PostgreSQL from the SQLite database on first startup:
 - Docker Compose mounts `./min (1).db` → `/app/data/min.db` in the container
-- The app reads `SQLITE_SEED_PATH=/app/data/min.db` from the container environment
+- The app reads `SQLITE_SEED_PATH=/app/data/min.db` from docker-compose.yml (default)
 - Migration runs automatically if PostgreSQL is empty
 - Check logs for "PostgreSQL seed completed successfully"
 
-If you rename or relocate the seed file, update both:
-1. The volume mount in `docker-compose.yml`
-2. The `SQLITE_SEED_PATH` environment variable
+**Important**: When using Docker, the `.env` file's `SQLITE_SEED_PATH` is ignored because docker-compose.yml overrides it with the container path. If you rename or relocate the seed file:
+1. Update the volume mount in `docker-compose.yml`: `"./your-file.db:/app/data/min.db:ro"`
+2. The container path `/app/data/min.db` should remain unchanged (or update both volume and SQLITE_SEED_PATH in docker-compose.yml)
 
 ## Testing
 

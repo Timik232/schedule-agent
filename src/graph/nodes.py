@@ -478,7 +478,7 @@ def _ensure_time(value: Any, default: time_type) -> time_type:
 def _normalize_tool_result(tool_call: ToolCall, outcome: Any) -> Any:
     if tool_call.tool == ToolName.GET_FIRST_CLASS_FOR_GROUP:
         if not outcome:
-            return None
+            return {}
         try:
             return LessonResponse.model_validate(outcome).model_dump()
         except ValidationError:
