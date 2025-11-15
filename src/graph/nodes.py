@@ -4,13 +4,12 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from datetime import date as date_type, datetime, time as time_type
-from typing import Any
+from typing import Any, Optional
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
-from ..config import get_settings
 from ..models.schemas import (
     ExtractedEntities,
     LessonResponse,
@@ -24,6 +23,7 @@ from ..models.schemas import (
 )
 from ..utils.logging import get_logger
 from ..utils.validators import ValidationError as GuardValidationError, normalize_time_range
+from ..utils.llm_factory import get_chat_model
 from ..utils.prompts import (
     FORMAT_RESPONSE_SYSTEM_PROMPT,
     build_entity_extraction_prompt,
@@ -38,6 +38,19 @@ TOOL_DISPATCH: dict[ToolName, Callable[..., Awaitable[Any]]] = {
     ToolName.GET_TEACHER_SCHEDULE: sql_templates.get_teacher_schedule,
     ToolName.FIND_COMMON_FREE_SLOTS: meeting_slots.plan_meeting_slots,
 }
+
+LLM_CLIENT_FACTORY: Callable[..., BaseChatModel] = get_chat_model
+
+
+def configure_llm_client_factory(factory: Optional[Callable[..., BaseChatModel]]) -> None:
+    """Configure which callable instantiates chat models for LangGraph nodes."""
+
+    global LLM_CLIENT_FACTORY
+    LLM_CLIENT_FACTORY = factory or get_chat_model
+
+
+def _acquire_llm_client(*, streaming: bool = False) -> BaseChatModel:
+    return LLM_CLIENT_FACTORY(streaming=streaming)
 
 
 def _fallback_entities(query: str) -> ExtractedEntities:
@@ -81,8 +94,15 @@ async def parse_query_node(state: AgentState) -> AgentStateUpdate:
     if not query:
         return {"error": "Empty user query"}
 
-    settings = get_settings()
-    llm = ChatOpenAI(**settings.llm_kwargs)
+    try:
+        llm = _acquire_llm_client()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.bind(error=str(exc)).exception("Failed to acquire LLM client for parsing")
+        entities = _post_process_entities(_fallback_entities(query))
+        return {
+            "intent": entities.intent,
+            "entities": entities,
+        }
     prompt = build_entity_extraction_prompt(query)
 
     try:
@@ -93,7 +113,12 @@ async def parse_query_node(state: AgentState) -> AgentStateUpdate:
                 "json_schema": ExtractedEntities.model_json_schema(),
             },
         )
-        entities = ExtractedEntities.model_validate_json(response.content)
+        payload = response.content
+        if isinstance(payload, str):
+            raw_entities = payload
+        else:
+            raw_entities = json.dumps(payload, ensure_ascii=False)
+        entities = ExtractedEntities.model_validate_json(raw_entities)
     except (ValidationError, ValueError) as exc:
         LOGGER.bind(query=query, error=str(exc)).warning("Entity extraction failed; using fallback")
         entities = _fallback_entities(query)
@@ -355,8 +380,15 @@ async def format_response_node(state: AgentState) -> AgentStateUpdate:
 
     payload_json = json.dumps(prompt_payload, ensure_ascii=False, default=str)
     user_prompt = build_format_response_prompt(payload_json)
-    settings = get_settings()
-    llm = ChatOpenAI(**settings.llm_kwargs)
+    try:
+        llm = _acquire_llm_client()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.bind(error=str(exc)).exception("Failed to acquire LLM client for formatting")
+        message = "Не удалось сформировать ответ, но данные доступны."
+        return {
+            "final_response": message,
+            "final_payload": prompt_payload,
+        }
 
     try:
         completion = await llm.ainvoke(

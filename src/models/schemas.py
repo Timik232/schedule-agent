@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date as date_type, datetime as datetime_type, time as time_type
 from enum import Enum
 from typing import Any, Optional
 
@@ -25,11 +25,11 @@ class ExtractedEntities(BaseModel):
     groups: list[str] = Field(default_factory=list, description="Normalized group names")
     teachers: list[str] = Field(default_factory=list, description="Normalized teacher names")
     rooms: list[str] = Field(default_factory=list, description="Normalized room names")
-    date: Optional[date] = Field(default=None, description="Specific date in ISO format")
-    date_range: Optional[tuple[date, date]] = Field(
+    date: Optional[date_type] = Field(default=None, description="Specific date in ISO format")
+    date_range: Optional[tuple[date_type, date_type]] = Field(
         default=None, description="Inclusive start and end dates"
     )
-    time_range: Optional[tuple[time, time]] = Field(
+    time_range: Optional[tuple[time_type, time_type]] = Field(
         default=None, description="Inclusive time range for filtering"
     )
 
@@ -44,9 +44,9 @@ class ExtractedEntities(BaseModel):
 class LessonResponse(BaseModel):
     """Normalized lesson data returned to end users."""
 
-    date: date
-    start_time: time
-    end_time: time
+    date: date_type
+    start_time: time_type
+    end_time: time_type
     subject: str
     teacher: Optional[str] = None
     room: Optional[str] = None
@@ -56,9 +56,9 @@ class LessonResponse(BaseModel):
 class ScheduleLessonResponse(BaseModel):
     """Lesson representation used for schedule listings."""
 
-    date: date
-    start_time: time
-    end_time: time
+    date: date_type
+    start_time: time_type
+    end_time: time_type
     subject: str
     groups: list[str] = Field(default_factory=list)
     rooms: list[str] = Field(default_factory=list)
@@ -69,16 +69,16 @@ class TeacherScheduleResponse(BaseModel):
     """Teacher schedule payload containing multiple lessons."""
 
     teacher: str
-    date_start: date
-    date_end: date
+    date_start: date_type
+    date_end: date_type
     lessons: list[ScheduleLessonResponse] = Field(default_factory=list)
 
 
 class MeetingSlot(BaseModel):
     """Available meeting slot suggestion produced by the optimizer."""
 
-    start: datetime
-    end: datetime
+    start: datetime_type
+    end: datetime_type
     duration_minutes: int
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
 

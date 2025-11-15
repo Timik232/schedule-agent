@@ -79,7 +79,7 @@ QUERY_TIMEOUT_SECONDS=30
 ### Start Development Server
 
 ```bash
-poetry run uvicorn src.api.server:app --reload --port 8000
+poetry run uvicorn src.api.server:app --reload --port 8080
 ```
 
 ### Example Queries
@@ -88,29 +88,29 @@ poetry run uvicorn src.api.server:app --reload --port 8000
 import httpx
 
 # Query for first class
-response = httpx.post("http://localhost:8000/query", json={
+response = httpx.post("http://localhost:8080/query", json={
     "message": "Какая завтра первая пара у группы ИКМО-05-21?"
 })
 
 # Find meeting slots
-response = httpx.post("http://localhost:8000/query", json={
+response = httpx.post("http://localhost:8080/query", json={
     "message": "Когда преподаватель Иванов может встретиться с группами ИКМО-05-21 и ИКМО-06-21?"
 })
 ```
 
 ```bash
 # First class lookup
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8080/query \
     -H "Content-Type: application/json" \
     -d '{"message": "Какая первая пара у группы ИКМО-05-21 14.11.2025?"}'
 
 # Teacher schedule
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8080/query \
     -H "Content-Type: application/json" \
     -d '{"message": "Покажи расписание преподавателя Иванов с 14.11.2025 по 15.11.2025"}'
 
 # Meeting slots
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8080/query \
     -H "Content-Type: application/json" \
     -d '{"message": "Найди окно для встречи у Иванова и групп ИКМО-05-21, ИКМО-06-21 на следующей неделе"}'
 ```
@@ -146,7 +146,7 @@ curl -X POST http://localhost:8000/query \
 # Build and run both API and Postgres services
 docker compose up --build
 
-# Access API at http://localhost:8000
+# Access API at http://localhost:8080
 # Postgres exposed at localhost:5432 (user/password: schedule/schedule)
 ```
 

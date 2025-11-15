@@ -1,11 +1,11 @@
 """FastAPI application exposing the schedule agent endpoints."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from langchain_core.messages import HumanMessage
-from langgraph.graph import CompiledGraph
+from langgraph.graph.state import StateGraph, CompiledStateGraph
 from pydantic import BaseModel
 
 from ..config import get_settings
@@ -15,10 +15,10 @@ from ..models.schemas import AgentReply, ToolCall
 from ..utils.guardrails import guard_and_normalize_message
 from ..utils.validators import ValidationError
 
-_GRAPH: Optional[CompiledGraph] = None
+_GRAPH:  Optional[CompiledStateGraph] = None
 
 
-def _get_graph() -> CompiledGraph:
+def _get_graph() -> CompiledStateGraph | Any:
     global _GRAPH
     if _GRAPH is None:
         _GRAPH = build_schedule_agent_graph()

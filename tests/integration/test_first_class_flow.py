@@ -1,16 +1,31 @@
 from __future__ import annotations
 
 from datetime import date, time
+from typing import Generator
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api import server
-from src.models.schemas import AgentReply, QueryIntent, ToolCall
+from src.config import get_settings
+from src.models.schemas import AgentReply, QueryIntent, ToolCall, ToolName
 
-client = TestClient(server.app)
+
+@pytest.fixture
+def client(monkeypatch) -> Generator[TestClient, None, None]:
+    monkeypatch.setenv("LLM_PROVIDER", "lm_studio")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://schedule:schedule@localhost:5432/schedule")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    try:
+        yield TestClient(server.app)
+    finally:
+        get_settings.cache_clear()
 
 
-def test_first_class_query_flow(monkeypatch) -> None:
+def test_first_class_query_flow(monkeypatch, client: TestClient) -> None:
     expected_data = {
         "date": str(date(2025, 11, 14)),
         "start_time": str(time(9, 0)),
@@ -25,7 +40,7 @@ def test_first_class_query_flow(monkeypatch) -> None:
         return AgentReply(
             response="Завтра первая пара ...",
             intent=QueryIntent.FIRST_CLASS,
-            tool_calls=[ToolCall(tool="get_first_class_for_group", parameters={})],
+            tool_calls=[ToolCall(tool=ToolName.GET_FIRST_CLASS_FOR_GROUP, parameters={})],
             data=expected_data,
             error=None,
         )

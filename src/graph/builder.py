@@ -1,18 +1,24 @@
 """LangGraph builder for the schedule agent."""
 from __future__ import annotations
 
-from typing import Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import CompiledGraph, END, START, StateGraph
+from langgraph.graph import END, START, StateGraph
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from .edges import should_execute_tools
 from .state import AgentState
 from . import nodes
 
-
-def build_schedule_agent_graph(checkpointer: Optional[MemorySaver] = None) -> CompiledGraph:
+def build_schedule_agent_graph(
+    checkpointer: Optional[MemorySaver] = None,
+    llm_factory: Optional[Callable[..., BaseChatModel]] = None,
+) -> Any:
     """Create and compile the LangGraph for schedule queries."""
+
+    nodes.configure_llm_client_factory(llm_factory)
 
     graph = StateGraph(AgentState)
 
