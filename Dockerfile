@@ -16,8 +16,6 @@ RUN pip install --upgrade pip \
 
 COPY src /app/src
 
-COPY specs /app/specs
-
 EXPOSE 8080
 
 CMD ["uvicorn", "src.api.server:app", "--host", "0.0.0.0", "--port", "8080"]
